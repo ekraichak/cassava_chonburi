@@ -1,0 +1,285 @@
+---
+title: "Cassava Productivity Analysis"
+author: "Ekaphan Kraichak"
+format: gfm
+fig-dpi: 600
+execute: 
+  echo: false
+df-print: kable
+editor: visual
+editor_options: 
+  chunk_output_type: inline
+---
+
+## วัตถุประสงค์ของการวิเคราะห์
+
+การวิเคราะห์นี้ใช้ข้อมูลการเติบโต (growth) และผลผลิต (productivity) ของมันสำปะหลังในช่วงเวลาปลูกตั้งแต่ 75 - 300 วัน ในพื้นที่ อ.บ้านบึง และ อ.ศรีราชา จังหวัดชลบุรี ในช่วงปี พ.ศ. 2565-2566 (ค.ศ. 2022-23) โดยจะเน้นการแสดงผลการเติบโตและผลผลิตตามเวลา พันธุ์ และ พื้นที่ปลูก ดังต่อไปนี้
+
+```{r}
+#| warning: false
+#| echo: false
+#| label: data-prep
+
+library(tidyverse)
+
+# Read data
+product <- read_csv("productivity_cassava_chonburi.csv")
+cultivar <- read_csv("cultivar_cassava_chonburi.csv")
+
+#summarize measurements from the individuals
+product2 <- product %>% 
+  rowwise() %>% 
+  mutate(mean_height = median(c_across(plant.height01:plant.height10)), 
+         mean_LAI = median(c_across(LAI.01:LAI.10)),
+         mean_diameter = median(c_across(diameter.01:diameter.10))) %>% 
+  select(plot:fresh.root.weight, percent.starch, mean_height:mean_diameter) 
+
+#separate lat-long, filter for 75 DAP and above, also limit percent start between 10, 40
+product3 <- product2 %>% 
+  separate(GPS, into = c("lat","long"),sep = ",", convert = TRUE) %>% 
+  filter(day.after.planting >= 75, between(percent.starch, 10, 40))
+
+# find median measurment for growth
+median_product <- product3 %>% 
+  group_by(plot, day.after.planting) %>% 
+  summarize(across(.cols = c(lat,long, HI:mean_diameter), median, na.rm = TRUE))
+
+# combine cultivar and productivity
+cultivar2 <- cultivar %>% 
+  select(plot, district, area_rai, monoculture:cultivar.other)
+
+all_product <- median_product %>% 
+  left_join(cultivar2, by = "plot")
+
+## select only important cultivar variable
+cultivar3 <- cultivar2 %>% 
+  mutate(cultivar = ifelse(monoculture == "yes", paste("mono: ",cultivar.main, sep = ""), "mixed")) %>% 
+  select(plot, cultivar)
+
+## combine with productivity data
+all_product2 <- all_product %>%
+  group_by(plot) %>% 
+  summarise(across(.cols = c(lat, long, area_rai), mean, na.rm = T)) %>% 
+  left_join(cultivar3, by = "plot")
+
+## all product long format
+all_product_long <- all_product %>% 
+  pivot_longer(HI:mean_diameter, names_to = "measure", values_to = "value") %>% 
+  mutate(cultivar = ifelse(monoculture == "yes", paste("mono: ",cultivar.main, sep = ""), "mixed")) %>% 
+  mutate(measure = recode(measure,
+    fresh.root.weight = "Root Fresh Weight", 
+    HI = "Harvest Index", 
+    mean_diameter = "Median Diameter", 
+    mean_height = "Median Height", 
+    mean_LAI = "Median Leaf Area Index",
+    percent.starch = "Percent Starch"
+  )) %>% 
+  mutate(measure = factor(measure, levels = c("Median Height", 
+                                              "Median Diameter", 
+                                              "Median Leaf Area Index",
+                                              "Root Fresh Weight", 
+                                              "Harvest Index", 
+                                              "Percent Starch")))
+  
+```
+
+## สถานที่ดำเนินการ
+
+ข้อมูลติดตามการเจริญเติบโตของมันสำปะหลังเก็บที่บริเวณ อ.บ้านบึง และ อ.ศรีราชา จังหวัดชลบุรี มีพิกัดกึ่งกลางอยู่ที่ 13.11803°N, 101.0746°E โดยมีขนาดแปลงปลูกรวมแตกต่างกันออกไป
+
+```{r}
+#| warning: false
+#| echo: false
+#| label: map-of-area
+#| fig-format: retina
+
+library(ggmap)
+al1 <- get_map(location = c(lon = 101.0746, lat = 13.11803), zoom = 11, maptype = "terrain")
+chonburiMAP <- ggmap(al1, darken = c(0.5, "white"))
+#saveRDS(chonburiMAP, file = "chonburimap.RData")
+
+#load("chonburimap.RData")
+library(ggrepel)
+chonburiMAP +
+  geom_point(aes(x = long, y = lat, size = area_rai, color = cultivar), alpha = 0.5, data = all_product2) +
+  geom_text_repel(aes(x = long, y = lat, label = plot), size = 3, data = all_product2, max.overlaps = 15) +
+  scale_size_continuous(range = c(5, 10)) +
+  labs(size = "Planting Area (Rai)", x = "longtitude (°E)", y = "latitude (°N)", 
+       title = "Measured Plantation and Planting Area 2022-3") +
+  guides(colour = guide_legend(override.aes = list(size=6)))
+
+```
+
+## ภาพรวมของข้อมูล
+
+ภาพด้านล่างแสดงให้เห็นถึงแนวโน้มการเติบโตของ height, diameter, leaf area index ที่ได้จากค่ามัธยฐาน (median) ของ 10 ต้นในแต่ละแปลงที่แต่ละระยะเวลาปลูก และ ค่าผลผลิตของหัวมันสำปะหลังทั้งในรูปแบบ น้ำหนักสดของหัว (Root Fresh Weight) ดัชนีเก็บเกี่ยว (Harvest Index) และ ร้อยละของแป้งภายในหัว (Percent Starch)
+
+```{r}
+#| warning: false
+#| echo: false
+#| label: overall-productivity
+#| fig-dpi: 300
+
+ all_product_long %>% 
+  ggplot() +
+  geom_line(aes(x = day.after.planting, y = value, group = plot), color = "lightgray") +
+  geom_smooth(aes(x = day.after.planting, y = value)) +
+  facet_wrap(~ measure, scale = "free_y") +
+  theme_minimal() +
+  labs(title = "Overall productivity measure between 75-300 days after planting", 
+       x = "Day After Planting", 
+       subtitle = "each line represents each measured plot")
+```
+
+ตารางด้านล่างสรุปค่าเฉลี่ยของแต่ละแปลงในแต่ละช่วงเวลา
+
+```{r}
+#| warning: false
+#| echo: false
+library(knitr)
+product_processed <- all_product_long %>% 
+  group_by(plot, day.after.planting, measure) %>% 
+  summarize(mean_value = mean(value, na.rm = T)) %>% 
+  pivot_wider(names_from = day.after.planting, values_from = mean_value, names_prefix = "DAP")
+
+```
+
+#### 1) Median Height
+
+```{r}
+product_processed %>% 
+  filter(measure == "Median Height") %>% 
+  select(-measure)
+```
+
+#### 2) Median Leaf Area Index
+
+```{r}
+product_processed %>% 
+  filter(measure == "Median Leaf Area Index") %>% 
+  select(-measure)
+```
+
+#### 3) Median Diameter
+
+```{r}
+product_processed %>% 
+  filter(measure == "Median Diameter") %>% 
+  select(-measure)
+```
+
+#### 4) Harvest Index
+
+```{r}
+product_processed %>% 
+  filter(measure == "Harvest Index") %>% 
+  select(-measure)
+```
+
+#### 5) Root Fresh Weight
+
+```{r}
+product_processed %>% 
+  filter(measure == "Root Fresh Weight") %>% 
+  select(-measure)
+```
+
+#### 6) Percent Starch
+
+```{r}
+product_processed %>% 
+  filter(measure == "Percent Starch") %>% 
+  select(-measure)
+```
+
+## ความแตกต่างของผลผลิตตามสถานที่ปลูก
+
+ภาพด้านล่างแสดงให้เห็นถึงความแตกต่างการเติบโตและผลผลิตระหว่างแปลงในพื้นที่บ้านบึง กับ ศรีราชา โดยแสดงให้เห็นว่า ค่าการเติบโตและผลผลิตส่วนใหญ่จากแปลงที่บ้านบึง[สูงกว่า]{.underline}แปลงที่ศรีราชา ยกเว้นแต่ Harvest Index เท่านั้น
+
+```{r}
+#| warning: false
+#| echo: false
+#| label: productivity-by-area
+#| fig-dpi: 300
+all_product_long %>% 
+  group_by(district, measure, day.after.planting) %>% 
+  summarize(ave_value = mean(value, na.rm = T),
+            sd_value = sd(value, na.rm = T)) %>% 
+  mutate(lower = ave_value - sd_value, upper = ave_value + sd_value) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = factor(day.after.planting), 
+                      y = ave_value, 
+                      color = district, 
+                      ymax = upper, 
+                      ymin = lower, 
+                      group = district)) +
+  geom_pointrange() +
+  geom_line() +
+  facet_wrap(~ measure, scale = "free_y") +
+  theme_minimal() +
+  labs(x = "Days After Planting", y = "Average Value")
+```
+
+## ความแตกต่างของผลผลิตตามพันธุ์ปลุก
+
+ภาพด้านล่างแสดงให้เห็นถึงพันธุ์ปลูกไม่แตกต่างกันมากนักในเชิงการเติบโตและผลผลิตที่ได้ และมีแนวโน้มการเติบโตทางเวลาไปในทิศทางเดียวกัน
+
+```{r}
+#| warning: false
+#| echo: false
+#| label: productivity-by-cultivars
+#| fig-height: 6
+#| fig-width: 10
+#| fig-dpi: 300
+all_product_long %>% 
+  group_by(cultivar, day.after.planting, measure) %>% 
+  summarize(ave_value = mean(value, na.rm = T),
+            sd_value = sd(value, na.rm = T)) %>% 
+  mutate(lower = ave_value - sd_value, upper = ave_value + sd_value) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = factor(day.after.planting), 
+                      y = ave_value, 
+                      color = cultivar, 
+                      ymax = upper, 
+                      ymin = lower, 
+                      group = cultivar)) +
+  geom_pointrange() +
+  geom_line() +
+  facet_grid(measure ~ cultivar, scale = "free_y") +
+  theme_minimal() +
+  labs(x = "Days After Planting", y = "Average Value")
+```
+
+## ความสัมพันธ์ระหว่างพันธุ์ปลูกกับพื้นที่ปลูก
+
+@area-by-cultivars แสดงให้เห็นว่าพื้นที่ปลูกมีผลต่อความสามารถของพันธุ์อีกด้วย
+
+```{r}
+#| warning: false
+#| echo: false
+#| label: area-by-cultivars 
+#| fig-height: 10
+#| fig-width: 8
+#| fig-dpi: 300
+all_product_long %>% 
+  filter(cultivar %in% c("mixed", "mono: R9"), 
+         !(measure == "Median Leaf Area Index"), 
+         day.after.planting < 300) %>% 
+  group_by(day.after.planting, district, cultivar, measure) %>% 
+  summarize(mean_value = mean(value, na.rm = T)) %>% 
+  # group_by(measure, day.after.planting, cultivar) %>% 
+  # mutate(relative_value = mean_value/max(mean_value, na.rm = T)) %>% 
+  # select(day.after.planting, cultivar, measure, district, relative_value) %>% 
+  pivot_wider(names_from = district, values_from = mean_value) %>% 
+  mutate(B_win = (`Ban Bueng` - `Sri Racha`)*100/`Ban Bueng`) %>% 
+  mutate(B_win_01 = ifelse(B_win > 0, "Ban Bueng", "Sri Racha")) %>% 
+  # pivot_wider(names_from = district, values_from = mean_value) %>% 
+  ggplot(aes(x = factor(day.after.planting), y = B_win, fill = B_win_01)) +
+  geom_col() +
+  geom_hline(aes(yintercept = 0), linetype = 2) +
+  facet_grid(measure ~ cultivar) +
+  theme_bw() +
+  labs(y = "Percent Winning", x = "Days after Planting", fill = "Winning District") +
+  scale_y_continuous(breaks = c(-100, -50, 0, 50, 100), labels = c("", "50",  "0", "50","")) +
+  coord_flip()
+```
